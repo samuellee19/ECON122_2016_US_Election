@@ -53,20 +53,6 @@ Produce a detailed (2-3 pages) write-up of your classification method. Describe 
 
 Similar to the first project, I don't want to see R code in your write up. I only want to see output. However, I will base part of my evaluation on how concise and well commented your code is. I should be able to run your code and reproduce your test set predictions. Make sure to load all packages so that the code will run on my computer as well. If in doubt, test it on a lab computer that doesn't have all the packages/settings that your own machine has.
 
-Grading: 100 points
--------------------
-
-I will grade your written report on a 90 point scale based on your write-up of your classification method.
-
-I will use a 10-point scale to assess your R code:
-
--   readability and conciseness: is the code readable and appropriately commented? is your code concise, or could you accomplish a task in fewer steps?
--   Score examples:
-    -   10 = readable and sufficient comments, code written concisely
-    -   8 = readable and commented, but some parts could be written more efficiently
-    -   5 = mostly readable but contains multiple portions that could be written in a more clear manner, minimal comments
-    -   0 = all code could be written in a more readable manner, no comments and irrelevant commands
-
 ### Data Dictionary
 
 ``` r
