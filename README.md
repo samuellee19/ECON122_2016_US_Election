@@ -1,5 +1,5 @@
 # ECON122_2016_US_Election
-This Project was conducted for Data Science and Statistical Learning course in Fall 2018.
+This Project was conducted for Data Science and Statistical Learning course in Fall 2019.
 
 Team-Project-2
 ================
