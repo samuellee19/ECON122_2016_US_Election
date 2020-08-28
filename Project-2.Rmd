@@ -1,0 +1,605 @@
+---
+title: "Project 2"
+author: "Hongfei, Samuel, Priyanka"
+date: "11/14/2019"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse=TRUE, prompt=TRUE,comment=NULL,message=FALSE, include=TRUE, fig.height = 4, fig.width = 8)
+```
+
+```{r packageCheck, include=FALSE}
+mypacks <- c("ggplot2","dplyr","readr","tidyr", "ROCR", "boot","class","randomForest","e1071", "stringr","partykit","rpart", "glmnet","forcats","tidyverse","xgboost","caret")  # what packages are needed?
+packs <- installed.packages()   # find installed package list
+install.me <- mypacks[!(mypacks %in% packs[,"Package"])]  #what needs to be installed?
+if (length(install.me) >= 1) install.packages(install.me, repos = "http://cran.us.r-project.org")   # install (if needed)
+lapply(mypacks, library, character.only=TRUE)  # load all packages
+```
+
+
+```{r, echo=FALSE, warning=FALSE}
+set.seed(42)
+train <- read_csv("https://raw.githubusercontent.com/mgelman/data/master/train.csv")
+key <- read.csv("https://raw.githubusercontent.com/mgelman/data/master/county_facts_dictionary.csv")
+key[, "column_name"] <- sapply(key[, "column_name"], as.character)
+key[, "description"] <- sapply(key[, "description"], as.character)
+
+for (row in 1:nrow(key)) {
+    label <- key[row, "column_name"]
+    desc  <- key[row, "description"]
+    colnames(train)[which(names(train) == label)] <- desc
+
+}
+
+train_org <- train
+```
+
+Bootstrapping
+----
+To begin, we started by analyzing the the samples we had. We created a binary variable 'result', to represent that the specific winner was a democrat (1) or republican (0). We then took the average of the samples, and found that it was .15. This shows us that the data is heavily republican leaning, and therefore to prevent the samples from being skewed, we'd have to bootstrap samples to have an equal proportion of democratic and republican samples.
+
+```{r, echo=FALSE, include=FALSE}
+mapping <- c("Rep" = 0, "Dem" = 1)
+train$result <- mapping[train$winner16]
+mean(train$result)
+```
+
+Models: Logistic Regression
+----
+
+We wanted to deteremine whether or not the data being skewed towared Republican results would have an impact on our models. We therefore analyzed the effects of bootstrapping on the dataset in relation to the logistic regression. The point of this analysis was to see if there was any benefit of bootstraping the data set. We chose to do this using a logistic regression because we thought the effects of the bootstrapping could be more clearly seen on the statistics we'd use to analyse the performance, as there would be fewer confounding variables. If we used a more complicated model, differences in other hyperparameters may also have an impact on performance, and it would have been less clear to compare the results of the models. Therefore, we started by creating another bootstrapped data set where the proportion of Democratic and Republic counties would be the same. 
+
+```{r, echo=FALSE}
+
+# Creating the bootstrapped data with an equal number of republican and democratic samples
+dem <- filter(train, result == 1)
+rep <- filter(train, result == 0)
+dem_bootstrapped <- dem[sample(nrow(dem), nrow(rep), replace = TRUE),]
+train_bootstrapped <- rbind(rep, dem_bootstrapped)
+train_bootstrapped <- train_bootstrapped[sample(nrow(train_bootstrapped)),]
+```
+
+Non-Bootstrapped Data
+```{r, echo=FALSE, warning=FALSE}
+# Running the logistic regression on the non bootstrapped data
+train <- train %>% 
+  mutate(
+    result = recode_factor(winner16, Rep = "Rep", Dem = "Dem",Unknown = NA_character_)) %>% select(-c(winner16))
+logisticReg <- glm(result ~., data=train, family=binomial)
+train <- train %>% mutate(logProb = predict(logisticReg, type="response"))
+
+train %>% ggplot(aes(x=logProb, color=result)) + 
+  geom_density(size=1.5) + ggtitle("Forecasted default probabilities")
+
+preds_obj2 <- prediction(train$logProb, train$result, label.ordering=c("Rep","Dem"))
+perf_obj2 <- performance(preds_obj2, "tpr","fpr")
+perf_df2 <- data_frame(fpr=unlist(perf_obj2@x.values),
+                       tpr= unlist(perf_obj2@y.values),
+                       threshold=unlist(perf_obj2@alpha.values), 
+                       model="GLM2")
+ggplot(perf_df2, aes(x=fpr, y=tpr)) +  geom_line(size=1.5) + 
+  labs(x="false positive rate", y="true positive rate", title="ROC curve for logistic regression")
+
+train <- train %>% mutate(prediction1 = ifelse( logProb >= .5, "Dem", "Rep") ) 
+stats <- train %>% summarize(accuracy = mean(result == prediction1), 
+            precision = sum(result == "Dem" &  prediction1 == "Dem")/sum(prediction1 == "Dem"),
+            recall = sum(result == "Dem" & prediction1 == "Dem")/sum(result == "Dem"))
+stats
+```
+
+Bootstrapped Data
+```{r, echo=FALSE, warning=FALSE}
+# Running the logistic regression on the bootstrapped data
+train_bootstrapped <- train_bootstrapped %>% 
+  mutate(
+    result = recode_factor(winner16, Rep = "Rep", Dem = "Dem",Unknown = NA_character_)) %>% select(-c(winner16))
+train_bootstrapped_org <- train_bootstrapped
+
+logisticReg <- glm(result ~., data=train_bootstrapped, family=binomial)
+train_bootstrapped <- train_bootstrapped %>% mutate(logProb = predict(logisticReg, type="response"))
+
+train_bootstrapped %>% ggplot(aes(x=logProb, color=result)) + 
+  geom_density(size=1.5) + ggtitle("Forecasted default probabilities")
+
+preds_obj2 <- prediction(train_bootstrapped$logProb, train_bootstrapped$result, label.ordering=c("Rep","Dem"))
+perf_obj2 <- performance(preds_obj2, "tpr","fpr")
+perf_df2 <- data_frame(fpr=unlist(perf_obj2@x.values),
+                       tpr= unlist(perf_obj2@y.values),
+                       threshold=unlist(perf_obj2@alpha.values), 
+                       model="GLM2")
+ggplot(perf_df2, aes(x=fpr, y=tpr)) +  geom_line(size=1.5) + 
+  labs(x="false positive rate", y="true positive rate", title="ROC curve for logistic regression")
+
+train_bootstrapped <- train_bootstrapped %>% mutate(prediction1 = ifelse( logProb >= .5, "Dem", "Rep") ) 
+stats <- train_bootstrapped %>% summarize(accuracy = mean(result == prediction1), 
+            precision = sum(result == "Dem" &  prediction1 == "Dem")/sum(prediction1 == "Dem"),
+            recall = sum(result == "Dem" & prediction1 == "Dem")/sum(result == "Dem"))
+stats
+```
+
+Below, we see a table for the accuracy, precision, and recall for the bootstrapped and non bootstrapped data. The values for the bootstrapped data are slighlty mutable due to where we set our random seed for sample collection, but through experimentation these values changed by .01 max in each iteration.
+
+| Data Set Type    | Accuracy | Precision | Recall |
+|------------------|----------|-----------|--------|
+| Non-Bootstrapped |   .941       |   .851        |    .739    |
+| Bootstrapped     |    .923      |     .914      |    .932   |
+
+Based on using a logistic regression, bootstrapping the data helped in increasing the precision and recall, but not the accuracy. Given that the non-bootstrapped method had more republic samples, it makes sense that the accuracy is higher because if the model skews towards choosing republican probabilities it will fare well on a data set which is primarily republican. Therefore, the more important statistics of precision and recall give us a better indicator of how well the model fared. We can see since these values are higher and our accuracy is also quite high, the model fares well in being able to classify both republican and democratic samples.
+
+Through this analysis, we can see that using a bootstrapped data set is important and crucial in ensuring that our model is not skewed towards fitting the republican samples better than the democratic samples.
+
+Models: Lasso Regression
+----
+
+Following this analysis, we wanted to see what were the most important factors in determining which candidate would win. To do this, we used a lasso regression. For our data set, we used the bootstrapped data set because we could see that it was the data set which would lead to a more accurate value.
+
+```{r, echo=FALSE}
+train_bootstrapped <- train_bootstrapped %>% select(-c(logProb, prediction1))
+x_vars <- model.matrix(result~. , train_bootstrapped)[,-1]
+y_var <- train_bootstrapped$result
+lambda_seq <- 10^seq(2, -2, by = -.1)
+
+cv_output <- cv.glmnet(x_vars, y_var, 
+            alpha = 1, lambda = lambda_seq, family = "binomial")
+
+# identifying best lamda
+best_lam <- cv_output$lambda.min
+lasso_best <- glmnet(x_vars, y_var, alpha = 1, lambda = best_lam, family = "binomial")
+coef(lasso_best)
+```
+
+Through the Lasso Regression, we were able to determine which of the variables were the most useful in determining who the winner would be. The tables above shows the coefficient results of the Lasso regression. If a value is non-zero, meaning there is a value next to it, the variable was deemed important. Through this, we can then determine what the most significant factors were in determining which candidate won.
+
+Models: Decision Tree (Random Forest)
+----
+
+Since some of the variables have much larger values than the others, the regression models may be misled by giving more weights the variables of large values, even though they might not be the major factors. To avoid going through the complicated process of data normalization, the following analysis uses a tree-based model, decision tree, and reduces the effect of overfitting by the Random Forest algorithm.
+
+```{r, echo=FALSE, warning=FALSE}
+train_org <- train_org %>%
+  mutate(winner16=factor(winner16))
+names(train_org) <- make.names(names(train_org))
+
+train_dtree <- rpart(winner16 ~., data=train_org)
+
+train <- train %>% 
+  mutate(pred_dtree = predict(train_dtree, type="class"))
+
+conf_mat_dtree <- with(train,table(result, pred_dtree))
+#conf_mat_dtree
+stats_dtree <- train %>% summarize(accuracy = mean(result == pred_dtree), 
+            precision = sum(result == "Dem" &  pred_dtree == "Dem")/sum(pred_dtree == "Dem"),
+            recall = sum(result == "Dem" & pred_dtree == "Dem")/sum(result == "Dem"))
+stats_dtree
+```
+
+The decision tree shown above has an accuracy of 93.4%, an error rate of 6.6%, a precision of 86.4% and a recall of 82.5% on predicting the training data set. The recursive binary partitioning algorithm used for a decision tree allows it to be very flexible, but prone to overfitting. Therefore, though the model above demonstrate a relative high accurary, the model may not behave as well on the testing data. To reduce the effect of overftting, we choosed the random forest model. By using bagging as an alternative of cross validation and random predictor selection from the bootstrpped trees, the random forest model requires less computation time and reduces the effect overfitting for better prediction results in the test data set. The random forest model renders the following result:
+
+```{r, echo=FALSE, warning=FALSE}
+set.seed(42)
+train_forest <- randomForest(winner16 ~., data=train_org)
+train_forest
+
+train <- train %>% 
+  mutate(pred_forest = predict(train_forest, type="class"))
+
+conf_mat_forest <- with(train,table(result, pred_forest))
+#conf_mat_forest
+stats_forest <- train %>% summarize(accuracy = mean(result == pred_forest), 
+            precision = sum(result == "Dem" &  pred_forest == "Dem")/sum(pred_forest == "Dem"),
+            recall = sum(result == "Dem" & pred_forest == "Dem")/sum(result == "Dem"))
+stats_forest
+```
+
+The statistics calculated above suggests that the accuracy is 94.1% with a 5.91% OOB estimate of error rate, the precision is 85.8% and the recall is 73.3% in the random forest model. Although it seems to be less accurate on predicting the training data, a slightly lower accuracy indicates that the model reduce the effect of overfitting, which would result in better predictions in the testing data.
+
+Random Forest with Bootstrpped Data
+
+```{r}
+dim(train)
+dim(train_bootstrapped)
+```
+
+
+```{r, echo=FALSE, warning=FALSE}
+names(train_bootstrapped_org) <- make.names(names(train_bootstrapped_org))
+train_bootstrapped_org <- train_bootstrapped_org[sample(nrow(train_bootstrapped_org)),]
+n <- nrow(train_bootstrapped_org)
+size <- round(.8*n)
+train_boot <- train_bootstrapped_org[1:size,]
+test_boot <- train_bootstrapped_org[(size+1):n,]
+```
+
+```{r, echo=FALSE, warning=FALSE}
+train_bootstrapped_forest <- randomForest(result ~., data=train_boot)
+#train_bootstrapped_forest 
+test_boot <- test_boot %>% 
+  mutate(pred_forest_boot = predict(train_bootstrapped_forest, test_boot, type="class"))
+#varImpPlot(train_bootstrapped_forest)
+
+stats_forest_boot <- test_boot %>% summarize(accuracy = mean(result == pred_forest_boot),
+            precision = sum(result == "Dem" &  pred_forest_boot == "Dem")/sum(pred_forest_boot == "Dem"),
+            recall = sum(result == "Dem" & pred_forest_boot == "Dem")/sum(result == "Dem"))
+stats_forest_boot
+```
+Based on the reasoning mentioned in the regression model parts, we also conducted random forest algorithm on the bootstrapped data. The statistics above demonstrated a large improvement on the accuracy, precision and recall on the training data. The values are quite good for the recall, but the accuracy and precision are lower and can be better.
+
+Models: Extreme Gradient Boosting (XGBoost) 
+----
+
+We selected **Extreme Gradient Boosting** (XGBoost) as one of our methods to make better predictions without aforementioned problems of overfitting. 
+
+XGBoost is a decision-tree-based ensemble algorithm that employs gradient descent algorithm to minimize errors in sequential models. In fact, the algorithm uses regularization to avoid overfitting its models (LASSO and Ridge Regularizations). Even though its parallelization process could be helpful, we did not employ the function due to reproducibility problem.
+
+In order to implement the algorithm, we transformed existing dataset into matrices, then randomly selected samples from train dataset with 1:3 ratio. After splitting independent and dependent variables, we set basic settings, then ran the base model. 
+
+Due to intricacies of formatting in XGboost, we sampled the train data separately from other models. We used `forcats` library to recode the levels for compatibility with running `prediction` function with XGBoost and `caret` library for training and tuning processes:
+
+```{r XGBoost_Prep}
+
+train_prep <- train_org %>%
+  mutate(winner16 = fct_recode(winner16, Dem = "Dem", Rep = "Rep"))
+ 
+set.seed(123)
+train_smp_sz <- floor(0.67*nrow(train))
+train_ind <- sample(seq_len(nrow(train)), size = train_smp_sz)
+```
+
+For further tuning processes, we set the algorithm at 500 iterations, with a 10-Fold Cross Validation setting. 
+
+There are total of five hyperparameter tunings that we executed: 1. Grid Search,    
+2. Maximum Depth and Minimum Child Weight,   
+3. Column and Row Sampling,   
+4. Gamma, and    
+5. Learning Rate
+
+```{r XGBoost, echo=FALSE}
+set.seed(123)
+
+train_c <- train_prep[train_ind,]
+test_c <- train_prep[-train_ind,]
+
+train_c <- as.data.frame(train_c) %>%
+  mutate(winner16 = as.numeric(winner16) - 1)
+
+test_c <- as.data.frame(test_c) %>%
+  mutate(winner16 = as.numeric(winner16) - 1)
+
+train_X <- as.matrix(train_c %>% select(-winner16))
+train_Y <- as.factor(train_c$winner16)
+test_X <- as.matrix(test_c %>% select(-winner16))
+test_Y <- as.factor(test_c$winner16)
+
+# XGBoost with Default Hyperparameters
+train_control <- trainControl(
+  method = "none",
+  allowParallel = FALSE,
+  verboseIter = FALSE,
+  savePredictions = TRUE
+)
+
+grid_default <- expand.grid(
+  nrounds = 300,
+  max_depth = 6,
+  eta = 0.3,
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = 1,
+  subsample = 1
+  )
+
+set.seed(0)
+xgb_base <- train(
+  x = train_X,
+  y = train_Y,
+  trControl = train_control,
+  tuneGrid = grid_default,
+  method = "xgbTree",
+  verbose = TRUE
+)
+
+# Grid Search for Hyperparameters
+nrounds <- 500
+
+tune_grid <- expand.grid(
+  nrounds = seq(from = 20, to = nrounds, by = 5),
+  eta = c(0.025, 0.05, 0.1, 0.3),
+  max_depth = c(2, 3, 4, 5, 6),
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = 1,
+  subsample = 1
+)
+
+tune_control <- trainControl(
+  method = "cv",
+  number = 10,
+  #index = createFolds(tr_treated$Id_clean), # fix the folds
+  verboseIter = FALSE,
+  allowParallel = FALSE,
+  savePredictions = TRUE,
+  returnData = TRUE
+)
+
+set.seed(103)
+xgb_tune <- train(
+  x = train_X,
+  y = train_Y,
+  trControl = tune_control,
+  tuneGrid = tune_grid,
+  method = "xgbTree",
+  verbose = TRUE
+)
+
+# plotting Accuracy (Kappa) and Finding Best Tune
+# (Number of Iterations and the Learning Rate)
+# plot(xgb_tune, metric = "Kappa")
+# xgb_tune$bestTune
+
+## Maximum Depth and Minimum Child Weight
+tune_grid2 <- expand.grid(
+  nrounds = seq(from = 20, to = nrounds, by = 5),
+  eta = xgb_tune$bestTune$eta,
+  max_depth = ifelse(xgb_tune$bestTune$max_depth == 2,
+                     c(xgb_tune$bestTune$max_depth:4),
+                     xgb_tune$bestTune$max_depth - 1: xgb_tune$bestTune$max_depth + 1),
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = c(1,2,3),
+  subsample = 1
+)
+
+set.seed(15)
+xgb_tune2 <- train(
+  x = train_X,
+  y = train_Y,
+  trControl = tune_control,
+  tuneGrid = tune_grid2,
+  method = "xgbTree",
+  verbose = TRUE
+)
+
+#plot(xgb_tune2, metric = "Kappa")
+#xgb_tune2$bestTune
+
+# Column and Row Sampling
+tune_grid3 <- expand.grid(
+  nrounds = seq(from = 5, to = nrounds, by = 5),
+  eta = xgb_tune$bestTune$eta,
+  max_depth = xgb_tune2$bestTune$max_depth,
+  gamma = 0,
+  colsample_bytree = c(0.4, 0.6, 0.8, 1.0),
+  min_child_weight = xgb_tune2$bestTune$min_child_weight,
+  subsample = c(0.5, 0.75, 1.0)
+)
+
+set.seed(62)
+xgb_tune3 <- train(
+  x = train_X,
+  y = train_Y,
+  trControl = tune_control,
+  tuneGrid = tune_grid3,
+  method = "xgbTree",
+  verbose = TRUE
+)
+
+#plot(xgb_tune3, metric = "Kappa")
+#xgb_tune3$bestTune
+
+# Gamma
+tune_grid4 <- expand.grid(
+  nrounds = seq(from = 5, to = nrounds, by = 5),
+  eta = xgb_tune$bestTune$eta,
+  max_depth = xgb_tune2$bestTune$max_depth,
+  gamma = c(0,0.05,0.1,0.5,0.7,0.9,1.0),
+  colsample_bytree = xgb_tune3$bestTune$colsample_bytree,
+  min_child_weight = xgb_tune2$bestTune$min_child_weight,
+  subsample = xgb_tune3$bestTune$subsample
+)
+
+set.seed(10)
+xgb_tune4 <- train(
+  x = train_X,
+  y = train_Y,
+  trControl = tune_control,
+  tuneGrid = tune_grid4,
+  method = "xgbTree",
+  verbose = TRUE
+)
+
+#plot(xgb_tune4, metric = "Accuracy")
+#xgb_tune4$bestTune
+
+# Reducing the Learning Rate
+tune_grid5 <- expand.grid(
+  nrounds = seq(from = 10, to = 1000, by = 10),
+  eta = c(0.01, 0.015, 0.025, 0.05, 0.1),
+  max_depth = xgb_tune2$bestTune$max_depth,
+  gamma = xgb_tune4$bestTune$gamma,
+  colsample_bytree = xgb_tune3$bestTune$colsample_bytree,
+  min_child_weight = xgb_tune2$bestTune$min_child_weight,
+  subsample = xgb_tune3$bestTune$subsample
+)
+
+set.seed(85)
+xgb_tune5 <- train(
+  x = train_X,
+  y = train_Y,
+  trControl = tune_control,
+  tuneGrid = tune_grid5,
+  method = "xgbTree",
+  verbose = TRUE
+)
+
+#plot(xgb_tune5, metric = "Accuracy")
+#xgb_tune5$bestTune
+
+# Fitting the Model
+(final_grid <- expand.grid(
+  nrounds = xgb_tune5$bestTune$nrounds,
+  eta = xgb_tune5$bestTune$eta,
+  max_depth = xgb_tune5$bestTune$max_depth,
+  gamma = xgb_tune5$bestTune$gamma,
+  colsample_bytree = xgb_tune5$bestTune$colsample_bytree,
+  min_child_weight = xgb_tune5$bestTune$min_child_weight,
+  subsample = xgb_tune5$bestTune$subsample
+))
+
+set.seed(123)
+(xgb_model <- train(
+  x = train_X,
+  y = train_Y,
+  trControl = train_control,
+  tuneGrid = final_grid,
+  method = "xgbTree",
+  verbose = TRUE
+))
+```
+
+Final fitted decision tree is described as below:
+
+```{r, echo = FALSE}
+# printing decision tree
+xgb.plot.tree(model = xgb_model$finalModel, trees = 89, show_node_id = TRUE)
+```    
+
+It seems that our XGBoost utilizes less trees and parameters, relative to our Random Forest model. Even though we cannot simply exclude a possibility of overfitting by comparing the number, it  indicates that there could be less overfitting in XGBoost model.
+
+After we fitted the model, we made predictions on both training and testing data sets, then assessed Confusion Matrix and ROC curve / AUC values for a comparison of our models. 
+
+```{r XGB_Analyses}
+# make prediction
+train_c <- train_c %>%
+  mutate(probs1 = as.list(predict(xgb_model, type = "prob", newdata = train_c))[[2]], prediction1 = ifelse(probs1 >= 0.6, "Rep", "Dem")) %>%
+  mutate(winner16 = fct_recode(factor(winner16), Dem = "0", Rep = "1"), prediction1 = factor(prediction1))
+
+test_c <- test_c %>%
+  mutate(probs1 = predict(xgb_model, type = "prob", newdata = test_c)[[2]], prediction1 = ifelse(probs1 >= 0.6, "Rep", "Dem")) %>%
+  mutate(winner16 = fct_recode(factor(winner16), Dem = "0", Rep = "1"), prediction1 = factor(prediction1))
+```
+
+Analysis: Simple Random Forest vs. XGBoost 
+----
+
+While Random Forest and XGBoost both utilizes decision tree as their fundamental design, we initially assessed XGBoost model due to its **regularization** feature, which minimizes overfitting issues. 
+
+First, we looked at confusion matrices of our sample train and test data:   
+
+```{r}
+# Confusion Matrix
+(stats_train_xgb <- train_c %>% summarize(accuracy = mean(winner16 == prediction1),
+                                          precision = sum(winner16 == "Rep" & prediction1 == "Rep")/sum(prediction1 == "Rep"),
+                                          recall = sum(winner16 == "Rep" & prediction1 == "Rep")/sum(winner16 == "Rep")) )
+
+(stats_test_xgb <- test_c %>% summarize(accuracy = mean(winner16 == prediction1),
+                                          precision = sum(winner16 == "Rep" & prediction1 == "Rep")/sum(prediction1 == "Rep"),
+                                          recall = sum(winner16 == "Rep" & prediction1 == "Rep")/sum(winner16 == "Rep")) )
+```
+
+Hence, a confusion matrix of overall train data is as the following:
+
+```{r}
+train_prep %>% mutate(winner16 = as.numeric(winner16) - 1) %>%
+  mutate(probs1 = predict(xgb_model, type = "prob", newdata = train_prep)[[2]], prediction1 = ifelse(probs1 >= 0.6, "Rep", "Dem")) %>%
+  mutate(winner16 = fct_recode(factor(winner16), Dem = "0", Rep = "1"), prediction1 = factor(prediction1)) %>%
+  summarize(accuracy = mean(winner16 == prediction1),
+            precision = sum(winner16 == "Rep" & prediction1 == "Rep")/sum(prediction1 == "Rep"),
+            recall = sum(winner16 == "Rep" & prediction1 == "Rep")/sum(winner16 == "Rep"))
+```
+
+If we compare this to Random Forest Model,
+
+| Data Set Type    | Accuracy | Precision | Recall |
+|------------------|----------|-----------|--------|
+| Random Forest    |  .939    |   .851    |  .725  |
+| XGBoost - Test   |  .955    |   .980    |  .967  |
+| RF - Bootstrap   |  .987    |   .975    |    1   |
+| XGBoost - Total  |  .983    |   .992    |  .988  |
+
+From the chart above, we can see that both Random Forest (with Bootstrapping) and XGBoost performed well, with XGBoost having lower accuracy and higher precision. At this point, we cannot firmly conclude that either model will perform better on actual test data. However, if theoretical assumption of XGBooost (Regularization) turns out to be true on the data, we would prefer XGBoost to Random Forest algorithm. Also, we need to acknowledge that such results could change depending on seed selection, suggesting that XGBoost could outperform under different circumstances given slim differences we observed.
+
+Now, we will consider ROC / AUC values to further assess the two models.
+
+First, we created ROC curves for train and test samples of XGBoost:
+
+```{r}
+# creating ROC curve for the model
+preds_xg_train <- prediction(train_c$probs1,train_c$winner16, label.ordering=c("Dem", "Rep"))
+perf_xg_train <- performance(preds_xg_train, "tpr", "fpr")
+perftr_xg_df <- data_frame(fpr=unlist(perf_xg_train@x.values),
+                       tpr= unlist(perf_xg_train@y.values),
+                       threshold=unlist(perf_xg_train@alpha.values),
+                       model="Train XGBoost")
+
+preds_xg_test <- prediction(test_c$probs1,test_c$winner16, label.ordering=c("Dem", "Rep"))
+perf_xg_test <- performance(preds_xg_test, "tpr", "fpr")
+perfte_xg_df <- data_frame(fpr=unlist(perf_xg_test@x.values),
+                       tpr= unlist(perf_xg_test@y.values),
+                       threshold=unlist(perf_xg_test@alpha.values),
+                       model="Test XGBoost")
+
+# drawing two ROC curves using bind_rows and ggplot
+xgb.perf_df2 <- bind_rows(perftr_xg_df, perfte_xg_df)
+ggplot(xgb.perf_df2, aes(x = fpr, y = tpr, color = model)) + geom_line() + labs(x = "false positive rate (1-specificity)", y = "true positive rate (sensitivity)", title = "ROC Curve for Election Model (XGBoost)") + geom_abline(slope = 1, intercept = 0, linetype = 3)
+```
+
+Even though the above graphs could seem on-par or less convincing than Random Forest algorithm, XGBoost algorithm seems to perform very well, relative to conventional results. We could actually compare more precisely by calculating AUC for each model:   
+
+```{r, echo = FALSE}
+# a function for calculating AUC
+calc.auc <- function(preds, obs){
+  ROC_auc <- performance(preds, "auc")
+  AUC <- ROC_auc@y.values[[1]]
+}
+
+# run AUC calculation (Closer to 1, Better the Model)
+auc.train <- calc.auc(preds_xg_train, train_c$winner16)
+auc.train
+
+auc.test <- calc.auc(preds_xg_test, train_c$winner16)
+auc.test
+```     
+
+The above AUC values buttress the above statement. However, when we consider AUC of Random Forest (Bootstrapped) algorithm, the values are slightly lower:
+
+```{r}
+# creating prob for Random Forest for ROC Comparison
+test_boot <- test_boot %>% 
+  mutate(prob_forest_boot = predict(train_bootstrapped_forest, test_boot, type="prob")[,1])
+
+preds_rf <- prediction(test_boot$prob_forest_boot,test_boot$result, label.ordering=c("Dem", "Rep"))
+
+auc.rf <- calc.auc(preds_rf)
+auc.rf
+```
+
+Overall, **Random Forest with Bootstrap Data seems to perform better than XGBoost algorithm.** However, we cannot compare the two literally since two utilizes different sets of training and testing data. Under assumptions that regularization processes of XGBoost algorithm worked perfectly and that Random Forest algorithm still has some potential of overfitting, **we will select XGBoost as our final algorithm.**
+
+```{r, echo = FALSE}
+# pre-processing
+test_No_Y <- read_csv("https://raw.githubusercontent.com/mgelman/data/master/test_No_Y.csv")
+
+key <- read.csv("https://raw.githubusercontent.com/mgelman/data/master/county_facts_dictionary.csv")
+key[, "column_name"] <- sapply(key[, "column_name"], as.character)
+key[, "description"] <- sapply(key[, "description"], as.character)
+
+for (row in 1:nrow(key)) {
+    label <- key[row, "column_name"]
+    desc  <- key[row, "description"]
+    colnames(test_No_Y)[which(names(test_No_Y) == label)] <- desc
+}
+
+test_No_Y <- as.data.frame(test_No_Y)
+names(test_No_Y) <- make.names(names(test_No_Y))
+
+# making prediction on 52nd column
+probs1_final = predict(xgb_model, type = "prob", newdata = test_No_Y)[[2]]
+
+test_No_Y <- test_No_Y %>%
+  mutate(pred_winner = ifelse(probs1_final >= 0.6, "Rep", "Dem")) %>%
+  mutate(pred_winner = factor(pred_winner))
+
+# write csv file
+write_csv(test_No_Y, "test_No_Y_AgarwalChenLee.csv")
+```
