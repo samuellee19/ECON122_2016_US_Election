@@ -1,7 +1,5 @@
 Project 2
 ================
-Hongfei, Samuel, Priyanka
-11/14/2019
 
 ## Bootstrapping
 
